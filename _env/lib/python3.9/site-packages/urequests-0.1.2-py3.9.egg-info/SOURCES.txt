@@ -1,0 +1,7 @@
+setup.cfg
+setup.py
+urequests/urequests.py
+urequests.egg-info/PKG-INFO
+urequests.egg-info/SOURCES.txt
+urequests.egg-info/dependency_links.txt
+urequests.egg-info/top_level.txt

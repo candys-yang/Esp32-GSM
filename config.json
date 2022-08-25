@@ -1,0 +1,15 @@
+{
+    "wlan":{
+        "ssid": "kaikaikai", 
+        "pwd": "123456789",
+        "active": true
+    },
+    "webrepl":{
+        "active": true,
+        "pwd": "Esp32"
+    },
+    "server":{
+        "ip": "47.107.84.105", 
+        "port": "8266"
+    }
+}
