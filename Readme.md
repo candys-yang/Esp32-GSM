@@ -50,6 +50,7 @@ webrepl.start(password='Esp32Room')
 
 # 上传程序文件到 ESP32 文件系统中。实例中的 192.168.0.120 为模块所获得的IP地址
 python3 webrepl/webrepl_cli.py  boot.py 192.168.0.120:/boot.py 
+python3 webrepl/webrepl_cli.py  app.py 192.168.0.120:/app.py
 python3 webrepl/webrepl_cli.py  config.json 192.168.0.120:/config.json
 
 
