@@ -18,7 +18,6 @@ NOTE:
         TimeRW()
 
 '''
-
 import time
 import os
 from machine import Pin, PWM
@@ -31,8 +30,12 @@ STAT_CSQ = 0
 STAT_CSCA = 'ERROR'   # 号码|ERROR
 STAT_CPIN = 'ERROR'   # READY|ERROR
 STAT_AT =   False     # 
-STAT_AT_TIME = 0      # 上次收到 AT 命令回显的时间
+STAT_AT_TIME = 0      #
 STAT_CGREG= False     # 
+STAT_CHECK_TIME = 0   # 下次状态检查时间
+
+TASK_QUEUE = []
+READ_QUEUE = []       #完整的命令结果，如：  [ ['AT+CSQ','xxxxxxxxx','OK'], ... ]
 
 class API: ...
 
@@ -66,8 +69,7 @@ class MSG:
     ''' 
     对短信进行解析处理 
     '''
-    def __init__(self) -> None:
-        pass
+    def __init__(self) -> None: pass
 
     def ReadMate(self, data): 
         ''' 读取模块原始的短信数据 '''
@@ -91,11 +93,6 @@ class MSG:
             )
         print('ReadMate.head.source ---> ', source)
         print('ReadMate.head.dates  ---> ', dates)
-
-
-
-
-
     pass
 
 class GPIO:
@@ -184,179 +181,186 @@ class GPIO:
             
             pass
 
-    class UART2: 
-        ''' 与短信模块通讯 '''
+    class Uart:
+        ''' 短信模块通讯类 '''
         def __init__(self) -> None:
-            ''' 初始化短信模块通讯 '''
+            ''' 初始化短信模块通讯类 '''
             self.uart = UART(2, baudrate=115200)
-            self.MSG = MSG()
-            self.NET = Net(self.uart)
-            self.TIME_RW_COUNTS = 0
-            self.READ_QUEUE = []
-            pass
 
-        def Read(self): 
+        def ReadOne(self): 
             ''' 
-            从模块读取数据，并发送到队列。 
+            读取一个完整的返回信息（此方法不会将返回值写入 READ_QUEUE）
             
-            NOTE: 
-                当收到响铃消息时，将自动发送挂断命令
+            Return: [原始命令,返回数据,...,结束字符]
             '''
-            global STAT_AT_TIME
-            #
-            readrow = self.uart.readline()
-            if readrow is not None: 
-                # 收到数据时，更新 AT_TIME 
-                STAT_AT_TIME = time.time()
+            redata = []
+            _exec_time = time.time()
+            while True:
+                # 超时处理
+                if _exec_time <= time.time() - 5: 
+                    print('Read AT Timeout, Try redata=' + str(redata))                    
+                    return None
                 #
-                data = str(readrow.decode('ascii'))
-                if data in ['\r', '\n', '\r\n', '\n\r']: 
-                    return None
-                data = data.replace('\r','').replace('\n','')
-                # 处理来电事件，发送挂断操作
-                if data.find("+CGEV:") == 0: 
-                    self.Write("AT+CHUP")
-                    return None
-                if data.find('RING') == 0: 
-                    self.Write("AT+CHUP")
-                    return None
-                # 处理新短信事件，调用新短信方法
-                if data.find('+CMTI:') == 0: 
-                    msgindex = data.rsplit(",")
-                    self.uart.write("AT+CMGF=1" + chr(13))
-                    self.uart.write('AT+CSCS="GSM"' + chr(13))
-                    self.uart.write('AT+CMGR=' + msgindex[1] + chr(13))
-                    return None
-                # TCP消息处理
-                if data.find("RECV FROM") == 0: 
-                    print('TCP\\UDP:', data)
-                    return None
-                # 一般消息处理
-                self.READ_QUEUE.append(str(data))
-                if data == 'OK':
-                    self.Read_Sorting()
-                if data == 'ERROR': 
-                    self.Read_Sorting()
-                if data.find("+CMS ERROR:") == 0: 
-                    self.Read_Sorting()
-                if data.find("+CME ERROR:") == 0: 
-                    self.Read_Sorting()
-                
-        def Write(self, data:str):
-            ''' 向写队列插入数据 '''
-            print("Sent Command: " + data)
-            self.uart.write(data + chr(13)) 
+                readrow = self.uart.readline()
+                if readrow is not None: 
+                    data = str(readrow.decode('ascii'))
+                    data = data.replace('\r','').replace('\n','')
+                    # 如果是空行，退出本次循环
+                    if data not in ['\r', '\n', '\r\n', '\n\r', '']: 
+                        print('DEBUG.URAT.RecData: ', data, '<--|')
+                        # 来电消息、新短信，立即返回
+                        if data.find("+CGEV:") == 0: return ['+CGEV', data, 'OK']
+                        if data.find('+CLCC:') == 0: return ['+CLCC', data, 'OK']
+                        if data.find('RING') == 0:  return ['RING', data, 'OK']
+                        if data.find('VOICE CALL') == 0: return ['VOICE CALL', data, 'OK']
+                        if data.find('+CMTI') == 0: return ['+CMTI', data, 'OK']
+                        # 其它消息，立即返回
+                        if data.find('*ATREADY') == 0: return ['*ATREADY', data, 'OK']
+                        if data.find('+CPIN') == 0: return ['+CPIN', data, 'OK']
+                        if data.find('SMS DONE') == 0: return ['SMS DONE', data, 'OK']
+                        if data.find('PB DONE') == 0: return ['PB DONE', data, 'OK']
 
-        def TcpSenData(self, serip, port, types, data): 
-            ''' 
-            与服务器建立 tcp 并发送数据 
-            
-            Args:
-                serip:  服务器IP
-                port:   服务端口
-                types:  数据类型
-                data:   数据
+                        # 记录分片输出
+                        redata.append(str(data))
+                        # 命令完结，退出
+                        if data in ['OK','ERROR']:  return redata
+                        if data.find("+CMS ERROR:") == 0: return redata
+                        if data.find("+CME ERROR:") == 0: return redata
 
-            Example:
-                self.uart2.TcpSenData(
-                    serip='47.104.187.138',
-                    port='8266',
-                    types='MSG',
-                    data="this is test.")
+        def ReadAll(self):
+            ''' 一次性读取所有数据并存放到 READ_QUEUE 队列中 '''
+            while True: 
+                data = self.ReadOne()
+                if data is not None: READ_QUEUE.append(data)
+                if data is None: return None
+                 
+        def Write(self, data, chr13=True): 
+            ''' 向模块发送AT命令 '''
+            print("SentAT: ", data)
+            if chr13: self.uart.write(data + chr(13)) 
+            else: self.uart.write(data)
 
-            '''
+class Timers: 
+    ''' 
+    硬件定时器 
 
-            def __write(cmd): 
-                self.uart.write(cmd + '\r\n')
+    NOTE:
+    
+    '''
+    def __init__(self, uart:GPIO.Uart) -> None:
+        ''' 初始化定时器操作对象 '''
+        self.uart = uart
+        pass
 
-            _data = "$DATA_MATE=V1,{0}${1}".format(types, data)
-            
-            __write('AT+CREG=1')
-            __write('AT+CGDCONT=1,"IP","CMNET"')
-            __write('AT+CSOCKSETPN=1')
-            __write('AT+CIPMODE=0')
-            __write('AT+NETOPEN')
-            time.sleep(1)
-            __write('AT+CIPOPEN=0,"TCP","{0}",{1}'.format(serip, port))
-            time.sleep(1)
-            __write('AT+CIPSEND=0,' + str(len(_data)))
-            time.sleep(1)
-            __write(_data)
-            __write('AT+CIPCLOSE=0')
-            __write('AT+NETCLOSE')
+    def CycleMain(self):
+        ''' 
+        周期入口 
+        
+        如果当前有 TASK_QUEUE ，则不会执行 Exec_Read()
 
-        def TimeRW(self): 
-            ''' 定时器主线程，负责轮询模块读缓冲，定期写任务 '''
-            self.TIME_RW_COUNTS += 1
-            # 定时发送状态监控指令
-            if self.TIME_RW_COUNTS % 1000 == 0:   
-                self.Write("AT")
-                self.Write("AT+CSQ")            # 信号质量
-                self.Write("AT+CSCA?")          # 运营商
-                self.Write("AT+COPS?")          # 短信中心
-                self.Write("AT+CPIN?")          # sin卡状态
-                self.Write("AT+CPMS?")          # 短信数量
-                self.Write("AT+CGREG?")         # 与运营商注册状态
-            # 定时发送状态数据到服务器
-            if self.TIME_RW_COUNTS % 200 == 0: 
-                self.NET.SentSTAT()
-            # 读数据 轮询
-            self.Read()
-            # AT状态判定，用于指示灯
-            global STAT_AT, STAT_AT_TIME
-            if STAT_AT_TIME <= time.time() - 60: STAT_AT = False
-            if STAT_AT_TIME >= time.time() - 60: STAT_AT = True
-            # 重置定时计数器
-            if self.TIME_RW_COUNTS > 1000000: 
-                self.TIME_RW_COUNTS = 0
-            pass
+        这些方法在一个 CycleMain 周期里是互斥的:
+            Exec_Read()  
+            Exec_AT()
+        '''
+        global TASK_QUEUE, STAT_CHECK_TIME
+        #
+        if len(TASK_QUEUE) >= 1:
+            q = TASK_QUEUE.pop()
+            if q['type'] == 'at': self.Exec_AT(q)
+        elif STAT_CHECK_TIME <= time.time():  # 判断是否应该检查状态
+            # 每隔30秒后，检查一次状态
+            STAT_CHECK_TIME = time.time() + 30 
+            self.Exec_AT({"type": "at", "data": "AT", "callback": READ_QUEUE.append})
+            self.Exec_AT({"type": "at", "data": "AT+CSQ", "callback": READ_QUEUE.append})
+            self.Exec_AT({"type": "at", "data": "AT+CSCA?", "callback": READ_QUEUE.append})
+            self.Exec_AT({"type": "at", "data": "AT+COPS?", "callback": READ_QUEUE.append})
+            self.Exec_AT({"type": "at", "data": "AT+CPIN?", "callback": READ_QUEUE.append})
+            self.Exec_AT({"type": "at", "data": "AT+CPMS?", "callback": READ_QUEUE.append})
+            self.Exec_AT({"type": "at", "data": "AT+CGREG?", "callback": READ_QUEUE.append})
+        else:
+            self.Exec_Read()
 
-        def Read_Sorting(self):
-            ''' 
-            Read方法读取到 OK 后，调用此函数对命令进行分拣处理 
-            
-            NOTE: 
-                这里不会处理新短信的消息，因为事件消息没有 OK 回显
-            '''
-            read_data = self.READ_QUEUE
-            # 解析数据
-            if read_data[0] == "AT": pass
-            if read_data[0] == "AT+CSQ":
-                csq_mate = str(read_data[1])
-                csq_v = csq_mate.replace("+CSQ: ","").rsplit(',')
-                global STAT_CSQ
-                STAT_CSQ = int(csq_v[0])
-            if read_data[0] == "AT+CSCA?": 
-                mate = str(read_data[1])
-                global STAT_CSCA
+    def Exec_Read(self): 
+        ''' 定时任务 '''
+        global READ_QUEUE
+        global STAT_CSQ, STAT_CSCA, STAT_CPIN, STAT_AT, STAT_CGREG, STAT_AT_TIME
+        # 判断模块是否有需要读取的信息
+        if self.uart.uart.any() >= 1: 
+            data = self.uart.ReadOne() 
+            READ_QUEUE.append(data)
+        # 读取 READ_QUEUE 队列并处理
+        if len(READ_QUEUE) >= 1:
+            qd = READ_QUEUE.pop()
+            print("READ_QUEUE POP: ", qd)
+            # 来电，直接挂断
+            if qd[0] == '+CGEV' or qd[0] == 'RING':
+                self.Exec_AT({'type':'at','data':'AT+CHUP','callback': print})
+            # 新短信处理
+            if qd[0].find('+CMTI') == 0: 
+                msgindex = data[1].rsplit(",")
+                self.Exec_AT({'type':'at','data':'AT+CMGF=1','callback': print})
+                self.Exec_AT({'type':'at','data':'AT+CSCS="GSM"','callback': print})
+                self.Exec_AT(
+                    {'type':'at','data':'AT+CMGR=' + msgindex[1],'callback': MSG().ReadMate})
+            # 处理状态信息
+            #   信号
+            if qd[0] == 'AT+CSQ': 
+                try:
+                    STAT_CSQ = int(str(qd[1]).replace("+CSQ: ","").rsplit(',')[0])
+                except:
+                    STAT_CSQ = 0
+            #   命令响应
+            if qd[0] == 'AT': 
+                STAT_AT_TIME = time.time()
+                STAT_AT = True
+            #   sin卡连接
+            if qd[0] == '+CPIN': 
+                if str(qd[1]).find('READY') >= 0: 
+                    STAT_CPIN = 'READY'
+                else:
+                    STAT_CPIN = 'ERROR'
+            #   注册状态
+            if qd[0] == 'AT+CGREG?': 
+                if str(qd[1]).find('0,1') >= 0: 
+                    STAT_CGREG = True
+                else:
+                    STAT_CGREG = False
+            #   中心号码
+            if qd[0] == 'STAT_CSCA': 
+                mate = str(qd[1])
                 if mate.find("ERROR") >= 0: 
                     STAT_CSCA = "ERROR"
                 else:
                     v = mate.replace("+CSCA: ","").rsplit(',')
                     v = v[0].replace("\"","")
                     STAT_CSCA = v
-            if read_data[0] == "AT+CPIN?": 
-                mate = str(read_data[1])
-                global STAT_CPIN
-                if mate.find("READY") >= 0: 
-                    STAT_CPIN = 'READY'
-                else:
-                    STAT_CPIN = 'ERROR'
-            if read_data[0] == "AT+CGREG?": 
-                mate = str(read_data[1])
-                global STAT_CGREG
-                if mate.find("+CGREG: 0,1") >= 0: 
-                    STAT_CGREG = True
-                else:
-                    STAT_CGREG = False
-            if str(read_data[0]).find("AT+CMGR=") == 0: 
-                self.MSG.ReadMate(read_data)
+            #
+        # STAT_AT_TIME 过期状态更新
+        if STAT_AT_TIME + 60 <= time.time(): 
+            STAT_AT = False
 
+        pass
 
-            print("Receive ---> ",read_data)
-            self.READ_QUEUE.clear()
-             
-            pass
+    def Exec_AT(self, taskdata):
+        ''' 
+        执行AT任务
+        执行结果不会发送到 READ_QUEUE。除非 callback 为 READ_QUEUE.append
+
+        Args:
+            taskdata: 
+                {"type": "at", "data": AT命令内容, "callback": 回调函数 }
+        
+        '''
+        print("DEBUG:UART:SentAT: ", taskdata['data'])
+        if self.uart.uart.any() >= 1: self.uart.ReadAll()
+        self.uart.Write(taskdata['data'])
+        redata = self.uart.ReadOne()
+        try:
+            fun = taskdata['callback']
+            fun(redata)
+        except Exception as e:
+            print("Exec AT CallBack Try:", str(e))
+
 
 class Cmd: 
     ''' 内置命令 '''
@@ -375,35 +379,38 @@ class Cmd:
         print("STAT_AT=" + str(STAT_AT))
         print("STAT_CGREG=" + str(STAT_CGREG))
 
+
+
 class Main:
     ''' 应用程序主类，boot.py 初始化完成后，将从这里开始应用程序 '''
     def __init__(self) -> None:
         ''' 初始化应用程序 '''
         print('Application Start.')
-        self.uart2 = GPIO.UART2()
-        self.light = GPIO.Light()
-        self.cmd = Cmd()
+        #
+        global TASK_QUEUE
+        #
+        cmd = Cmd()
+        uart = GPIO.Uart()
+        timers = Timers(uart)
         # Esp32 定时器，读数据
         self.tim0 = Timer(0)
         self.tim0.init(
-            period=15, mode=Timer.PERIODIC, callback=lambda t:self.uart2.TimeRW())
-        # Esp32 定时器，指示灯
-        self.tim1 = Timer(1)
-        self.tim1.init(
-            period=50, mode=Timer.PERIODIC, callback=lambda t:self.light.TimeMain())
-        
-        # 初始化短信模块必要的参数   
-        self.uart2.Write('AT+CMGF=1')
-        self.uart2.Write('AT+CSCS="GSM"')
-        self.uart2.Write('AT+CNMI=2,1')
-        
+            period=10, mode=Timer.PERIODIC, 
+            callback=lambda p:timers.CycleMain())
+
+
         # 主循环
         while True: 
             __c = input()
             if len(__c) >= 1: 
                 try:
-                    if __c == 'STAT': self.cmd.Stat()
+                    if __c == 'STAT': cmd.Stat()
                     elif __c == 'reboot': Pin(4, Pin.OUT).value(1)
-                    else: self.uart2.Write(__c)
+                    else: 
+                        TASK_QUEUE.append({
+                            "type": "at", 
+                            "data": __c,
+                            "callback": print
+                        })
                 except Exception as e: 
                     print(str(e))
