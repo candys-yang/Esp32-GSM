@@ -128,6 +128,7 @@ class GPIO:
                     return None
                 # 处理新短信事件，调用新短信方法
                 if data.find('+CMTI:') == 0: 
+                    print(data)
                     self.New_MsgEvent()
                     return None
                 # 一般消息处理
@@ -263,7 +264,7 @@ class Main:
         # Esp32 定时器，读数据
         self.tim0 = Timer(0)
         self.tim0.init(
-            period=50, mode=Timer.PERIODIC, callback=lambda t:self.uart2.TimeRW())
+            period=20, mode=Timer.PERIODIC, callback=lambda t:self.uart2.TimeRW())
         # Esp32 定时器，指示灯
         self.tim1 = Timer(1)
         self.tim1.init(

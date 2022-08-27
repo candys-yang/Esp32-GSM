@@ -24,9 +24,15 @@ def StartNet(ssid, passwd):
     wlan.active(True)
     if not wlan.isconnected():
         print('connecting to network...')
+        print("")
         wlan.connect(ssid, passwd)
+        await_time = 0
         while not wlan.isconnected():
-            pass
+            time.sleep(1)
+            await_time += 1
+            if await_time >= 30: 
+                print("Connect WLAN Timeout, Skip.")
+                break
         print(wlan.ifconfig())
 
 def LoadConfig(): 
@@ -65,9 +71,14 @@ def InitREPL():
 
 
 if __name__ == '__main__': 
+    Pin(18, Pin.OUT).on()
+    Pin(19, Pin.OUT).on()
+    Pin(21, Pin.OUT).on()
     print('Start Main Program...')
     print('Init Wlan.')
     InitNet()
+    Pin(19, Pin.OUT).off()
+    
     print('Init REPL.')
     InitREPL()
     print('Import App Process.')

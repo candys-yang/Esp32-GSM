@@ -59,13 +59,16 @@ python3 webrepl/webrepl_cli.py  config.json 192.168.0.120:/config.json
 
 ## Maintenance
 
-程序自带了一些维护函数，便于后期的程序更新。
+当需要修改应用程序时，可参考以下方法。
 
 
 ### 文件上传
 
 ```
 # 通过串口执行命令，连接网络和开启服务
+#   boot.py 启动过程会读取 config.json 中的网络配置
+#   如果 config.json 的 wlan.active = true ，则启动时会连接配置的WLAN热点
+#   WebREPL 亦是如此，webrepl.active = true ，则启动文件服务。
 >>> StartNet(ssid, passwd)
 >>> StartWebREPL()
 ```
@@ -74,3 +77,5 @@ python3 webrepl/webrepl_cli.py  config.json 192.168.0.120:/config.json
 # 传送程序到 esp32 （IP地址为esp32的地址）
 python3 webrepl/webrepl_cli.py  app.py 192.168.104.80:/app.py
 ```
+
+
