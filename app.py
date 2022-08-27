@@ -10,6 +10,7 @@ STAT_CSQ = 0
 STAT_CSCA = 'ERROR'   # 号码|ERROR
 STAT_CPIN = 'ERROR'   # READY|ERROR
 STAT_AT =   False     # 
+STAT_AT_TIME = 0      # 上次收到 AT 命令回显的时间
 STAT_CGREG= False     # 
 
 class API: ...
@@ -79,6 +80,8 @@ class GPIO:
                 if isopen:
                     self.PIN_R.value(1)
                     self.PIN_G.value(1)
+                else:
+                    if self.TS <= 40: self.TS += 5
                 pass
             # 红灯的时间分片
             if self.TS >= 50 and self.TS <= 74: 
@@ -88,12 +91,15 @@ class GPIO:
                 #
                 if isopen:
                     self.PIN_R.value(1)
+                else:
+                    if self.TS <= 70: self.TS += 5
                 pass
             # 蓝灯的时间分片
             if self.TS >= 75 and self.TS <= 100: 
                 if STAT_AT is False:
                     self.PIN_B.value(1)
-                pass
+                else:
+                    if self.TS <= 90: self.TS += 5
             
             pass
 
@@ -113,8 +119,13 @@ class GPIO:
             NOTE: 
                 当收到响铃消息时，将自动发送挂断命令
             '''
+            global STAT_AT_TIME
+            #
             readrow = self.uart.readline()
             if readrow is not None: 
+                # 收到数据时，更新 AT_TIME 
+                STAT_AT_TIME = time.time()
+                #
                 data = str(readrow.decode('ascii'))
                 if data in ['\r', '\n', '\r\n', '\n\r']: 
                     return None
@@ -141,6 +152,7 @@ class GPIO:
                     self.Read_Sorting()
                 if data.find("+CME ERROR:") == 0: 
                     self.Read_Sorting()
+                
 
         def Write(self, data:str):
             ''' 向写队列插入数据 '''
@@ -187,10 +199,9 @@ class GPIO:
 
         def TimeRW(self): 
             ''' 定时器主线程，负责轮询模块读缓冲，定期写任务 '''
+            # 定时发送状态监控指令
             self.TIME_RW_COUNTS += 1
             if self.TIME_RW_COUNTS >= 1000:   
-                global STAT_AT
-                STAT_AT = False
                 self.Write("AT")
                 self.Write("AT+CSQ")            # 信号质量
                 self.Write("AT+CSCA?")          # 运营商
@@ -200,7 +211,14 @@ class GPIO:
                 self.Write("AT+CGREG?")         # 与运营商注册状态
                 #
                 self.TIME_RW_COUNTS = 0
+            # 读数据 轮询
             self.Read()
+            # AT状态判定
+            global STAT_AT, STAT_AT_TIME
+            if STAT_AT_TIME <= time.time() - 60: STAT_AT = False
+            if STAT_AT_TIME >= time.time() - 60: STAT_AT = True
+            #
+            pass
 
         def Read_Sorting(self):
             ''' 
@@ -211,9 +229,7 @@ class GPIO:
             '''
             read_data = self.READ_QUEUE
             # 解析数据
-            if read_data[0] == "AT": 
-                global STAT_AT
-                STAT_AT = True
+            if read_data[0] == "AT": pass
             if read_data[0] == "AT+CSQ":
                 csq_mate = str(read_data[1])
                 csq_v = csq_mate.replace("+CSQ: ","").rsplit(',')
@@ -245,6 +261,7 @@ class GPIO:
 
             print("Receive ---> ",read_data)
             self.READ_QUEUE.clear()
+
             pass
 
         def New_MsgEvent(self): 
@@ -253,18 +270,35 @@ class GPIO:
              
             pass
 
+class Cmd: 
+    ''' 内置命令 '''
+    def __init__(self) -> None:...
+
+    def Stat(self):
+        ''' 显示当前状态 '''
+        global STAT_CSQ
+        global STAT_CSCA
+        global STAT_CPIN
+        global STAT_AT
+        global STAT_CGREG
+        print("STAT_CSQ=" + str(STAT_CSQ))
+        print("STAT_CSCA=" + str(STAT_CSCA))
+        print("STAT_CPIN=" + str(STAT_CPIN))
+        print("STAT_AT=" + str(STAT_AT))
+        print("STAT_CGREG=" + str(STAT_CGREG))
+
 class Main:
     ''' 应用程序主类，boot.py 初始化完成后，将从这里开始应用程序 '''
     def __init__(self) -> None:
         ''' 初始化应用程序 '''
         print('Application Start.')
-        
         self.uart2 = GPIO.UART2()
         self.light = GPIO.Light()
+        self.cmd = Cmd()
         # Esp32 定时器，读数据
         self.tim0 = Timer(0)
         self.tim0.init(
-            period=20, mode=Timer.PERIODIC, callback=lambda t:self.uart2.TimeRW())
+            period=15, mode=Timer.PERIODIC, callback=lambda t:self.uart2.TimeRW())
         # Esp32 定时器，指示灯
         self.tim1 = Timer(1)
         self.tim1.init(
@@ -277,27 +311,11 @@ class Main:
 
         # 主循环
         while True: 
-            cmd = input()
-            if len(cmd) >= 1: 
+            __c = input()
+            if len(__c) >= 1: 
                 try:
-                    if cmd == 'STAT': 
-                        global STAT_CSQ
-                        global STAT_CSCA
-                        global STAT_CPIN
-                        global STAT_AT
-                        global STAT_CGREG
-                        print("STAT_CSQ=" + str(STAT_CSQ))
-                        print("STAT_CSCA=" + str(STAT_CSCA))
-                        print("STAT_CPIN=" + str(STAT_CPIN))
-                        print("STAT_AT=" + str(STAT_AT))
-                        print("STAT_CGREG=" + str(STAT_CGREG))
-                        pass
-                    elif cmd == 'reboot': 
-                        Pin(4, Pin.OUT).value(1)
-                    else:
-                        self.uart2.Write(cmd)
+                    if __c == 'STAT': self.cmd.Stat()
+                    elif __c == 'reboot': Pin(4, Pin.OUT).value(1)
+                    else: self.uart2.Write(__c)
                 except Exception as e: 
                     print(str(e))
-
-
-        pass

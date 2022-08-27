@@ -56,26 +56,53 @@ python3 webrepl/webrepl_cli.py  config.json 192.168.0.120:/config.json
 
 ```
 
+### Line Interface
 
-## Maintenance
+> ESP32 和各个模块的连接，必须要有共地端，否则，不能正常工作。
 
-当需要修改应用程序时，可参考以下方法。
+| ESP32    | Module       | 说明                 |
+|----------|--------------|---------------------|
+| D18      | Red Light    | 红色灯泡             |
+| D19      | Green Light  | 绿色灯泡             |
+| D21      | Blue Light   | 蓝色灯泡             |
+| D4       | ESP32 EN     | 连接esp32自己的en引脚 |
+| RX2      | 4G Mod TX    | 连接4G模块的 Tx      |
+| TX2      | 4G Mod RX    | 连接4G模块的 Rx      |
 
 
-### 文件上传
+## Application 
+
+应用程序说明
+
+### Light
+
+> 灯泡闪烁原理，一个周期内，四种灯光颜色只会点亮 4/1 的时间，也就是说，如果有多种不正常的状态，会表现为多种颜色灯光的交替闪烁。
+
+| 表现               | 说明                            |
+|-------------------|---------------------------------|
+| 灯泡模块白色灯，亮   | 系统正在启动，正在连接配置的WLAN     |
+| 灯泡模块紫色灯，亮   | 正在启动文件服务                  |
+| 灯泡模块绿灯，闪烁   | 表示状态正常                      |
+| 灯泡模块黄灯，闪烁   | 表示网络不正常，可能信号极差        |
+| 灯泡模块红灯，闪烁   | 表示无信号                       |
+| 灯泡模块蓝灯，闪烁   | 表示 4G 模块没有响应 AT 指令       |
+| ESP32板卡的蓝色灯亮 | 表示boot.py过程完成，进入 app.py   |
+| ESP32板卡的红色灯亮 | 表示电源                         |
+
+### Server Config
+
+短信接收服务器配置方法
+
+在 config.json 配置文件中，修改 server 的IP和port即可。
+
+如果使用 Serial 连接 ESP32 ，则可通过应用函数修改。
 
 ```
-# 通过串口执行命令，连接网络和开启服务
-#   boot.py 启动过程会读取 config.json 中的网络配置
-#   如果 config.json 的 wlan.active = true ，则启动时会连接配置的WLAN热点
-#   WebREPL 亦是如此，webrepl.active = true ，则启动文件服务。
->>> StartNet(ssid, passwd)
->>> StartWebREPL()
+# 等待ESP32模块板卡的蓝灯点亮（D2），直接输入函数即可
+SetServer("服务器IP","服务器端口")
 ```
 
-```
-# 传送程序到 esp32 （IP地址为esp32的地址）
-python3 webrepl/webrepl_cli.py  app.py 192.168.104.80:/app.py
-```
+
+
 
 
