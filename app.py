@@ -1,9 +1,30 @@
+'''
+Esp32 GSM 的主要逻辑代码
+
+NOTE: 
+    短信模块的交互：
+        轮询事件:   
+            使用 ESP32 硬件定时器（time0），循环调用 TimeRW()
+        接收数据:   
+            TimeRW()函数会调用 UART.readline() 
+            数据不为 None 、\\r\\n ，则判定为有效的接收数据。
+            收到有效数据，将调用 Read_Sorting() 方法进行数据处理。
+        数据格式：
+            [原始命令, 响应数据, 响应数据（如果有多个响应数据）, 'OK']
+        发送命令:   
+            发送命令直接调用 GPIO.UART2.Write() 不推荐在开发中直接调用 uart.write()
+    
+    短信读取流程:
+        TimeRW()
+
+'''
 
 import time
 import os
 from machine import Pin, PWM
 from machine import Timer
 from machine import UART
+
 
 # 应用程序全局变量
 STAT_CSQ = 0
@@ -15,7 +36,67 @@ STAT_CGREG= False     #
 
 class API: ...
 
-class Net: ...
+class Net: 
+    ''' 网络传输 '''
+    def __init__(self, urat) -> None: self.urat = urat
+
+    def SentSTAT(self): 
+        ''' 发送状态数据到远程服务器 '''
+        global STAT_CSQ, STAT_CSCA, STAT_CPIN, STAT_AT, STAT_CGREG
+        self.urat.write('AT+CGDCONT=1,"IP","CMNET"' + chr(13))
+        self.urat.write('AT+CSOCKSETPN=1' + chr(13))
+        self.urat.write('AT+CIPMODE=0' + chr(13))
+        self.urat.write('AT+NETOPEN')
+        self.urat.write('AT+CIPOPEN=0,"TCP","47.104.187.138",8266' + chr(13))
+        time.sleep(5)
+        self.urat.write('AT+CIPSEND=0,9' + chr(13))
+        time.sleep(5)
+        self.urat.write('123456789' + chr(13))
+        self.urat.write('AT+CIPCLOSE=0' + chr(13))
+
+        pass
+
+    def SentGSM(self): 
+        ''' 发送短信到远程服务器 '''
+
+        pass
+
+
+class MSG: 
+    ''' 
+    对短信进行解析处理 
+    '''
+    def __init__(self) -> None:
+        pass
+
+    def ReadMate(self, data): 
+        ''' 读取模块原始的短信数据 '''
+        print('ReadMate ---> ', data)
+        head = str(data[1])
+        body = str(data[2])
+        print("ReadMate.head ---> ", head)
+        print("ReadMate.body ---> ", body)
+        # 处理头信息
+        head_list = head.replace("\"","").rsplit(',')
+        source = head_list[1]
+        d_list = str(head_list[3]).rsplit("/")
+        t_list = str(head_list[4]).rsplit(":")
+        dates = "{0}-{1}-{2} {3}:{4}:{5}".format(
+            "20" + str(d_list[0]),
+            str(d_list[1]),
+            str(d_list[2]),
+            str(t_list[0]),
+            str(t_list[1]),
+            str(t_list[2]).replace("+32",""),
+            )
+        print('ReadMate.head.source ---> ', source)
+        print('ReadMate.head.dates  ---> ', dates)
+
+
+
+
+
+    pass
 
 class GPIO:
     ''' 管理 ESP-32 的 GPIO '''
@@ -108,6 +189,8 @@ class GPIO:
         def __init__(self) -> None:
             ''' 初始化短信模块通讯 '''
             self.uart = UART(2, baudrate=115200)
+            self.MSG = MSG()
+            self.NET = Net(self.uart)
             self.TIME_RW_COUNTS = 0
             self.READ_QUEUE = []
             pass
@@ -139,8 +222,14 @@ class GPIO:
                     return None
                 # 处理新短信事件，调用新短信方法
                 if data.find('+CMTI:') == 0: 
-                    print(data)
-                    self.New_MsgEvent()
+                    msgindex = data.rsplit(",")
+                    self.uart.write("AT+CMGF=1" + chr(13))
+                    self.uart.write('AT+CSCS="GSM"' + chr(13))
+                    self.uart.write('AT+CMGR=' + msgindex[1] + chr(13))
+                    return None
+                # TCP消息处理
+                if data.find("RECV FROM") == 0: 
+                    print('TCP\\UDP:', data)
                     return None
                 # 一般消息处理
                 self.READ_QUEUE.append(str(data))
@@ -153,7 +242,6 @@ class GPIO:
                 if data.find("+CME ERROR:") == 0: 
                     self.Read_Sorting()
                 
-
         def Write(self, data:str):
             ''' 向写队列插入数据 '''
             print("Sent Command: " + data)
@@ -199,9 +287,9 @@ class GPIO:
 
         def TimeRW(self): 
             ''' 定时器主线程，负责轮询模块读缓冲，定期写任务 '''
-            # 定时发送状态监控指令
             self.TIME_RW_COUNTS += 1
-            if self.TIME_RW_COUNTS >= 1000:   
+            # 定时发送状态监控指令
+            if self.TIME_RW_COUNTS % 1000 == 0:   
                 self.Write("AT")
                 self.Write("AT+CSQ")            # 信号质量
                 self.Write("AT+CSCA?")          # 运营商
@@ -209,15 +297,18 @@ class GPIO:
                 self.Write("AT+CPIN?")          # sin卡状态
                 self.Write("AT+CPMS?")          # 短信数量
                 self.Write("AT+CGREG?")         # 与运营商注册状态
-                #
-                self.TIME_RW_COUNTS = 0
+            # 定时发送状态数据到服务器
+            if self.TIME_RW_COUNTS % 200 == 0: 
+                self.NET.SentSTAT()
             # 读数据 轮询
             self.Read()
-            # AT状态判定
+            # AT状态判定，用于指示灯
             global STAT_AT, STAT_AT_TIME
             if STAT_AT_TIME <= time.time() - 60: STAT_AT = False
             if STAT_AT_TIME >= time.time() - 60: STAT_AT = True
-            #
+            # 重置定时计数器
+            if self.TIME_RW_COUNTS > 1000000: 
+                self.TIME_RW_COUNTS = 0
             pass
 
         def Read_Sorting(self):
@@ -258,21 +349,18 @@ class GPIO:
                     STAT_CGREG = True
                 else:
                     STAT_CGREG = False
+            if str(read_data[0]).find("AT+CMGR=") == 0: 
+                self.MSG.ReadMate(read_data)
+
 
             print("Receive ---> ",read_data)
             self.READ_QUEUE.clear()
-
-            pass
-
-        def New_MsgEvent(self): 
-            ''' 收到新消息的事件 '''
-            print("New Messages.")
              
             pass
 
 class Cmd: 
     ''' 内置命令 '''
-    def __init__(self) -> None:...
+    def __init__(self) -> None: ...
 
     def Stat(self):
         ''' 显示当前状态 '''
@@ -308,7 +396,7 @@ class Main:
         self.uart2.Write('AT+CMGF=1')
         self.uart2.Write('AT+CSCS="GSM"')
         self.uart2.Write('AT+CNMI=2,1')
-
+        
         # 主循环
         while True: 
             __c = input()
