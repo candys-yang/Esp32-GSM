@@ -1,7 +1,10 @@
-#
-#   主程序
-#   ESP-32 短信猫
-#
+'''
+    ESP32 主程序
+    Boot.py 基于 MircoPython 实现了一个类分时系统。
+    Boot.py 启动完成后，将导入 app.py 并执行 __init__ 函数实现应用程序的初始化。
+
+
+'''
 import json
 import time
 import urequests 
@@ -10,7 +13,7 @@ import network
 from machine import Timer
 from machine import Pin
 
-
+        
 
 def StartWebREPL(pwd='Esp32'): 
     ''' 开启固件更新 '''
@@ -24,9 +27,15 @@ def StartNet(ssid, passwd):
     wlan.active(True)
     if not wlan.isconnected():
         print('connecting to network...')
+        print("")
         wlan.connect(ssid, passwd)
+        await_time = 0
         while not wlan.isconnected():
-            pass
+            time.sleep(1)
+            await_time += 1
+            if await_time >= 30: 
+                print("Connect WLAN Timeout, Skip.")
+                break
         print(wlan.ifconfig())
 
 def LoadConfig(): 
@@ -65,15 +74,20 @@ def InitREPL():
 
 
 if __name__ == '__main__': 
+    Pin(18, Pin.OUT).on()
+    Pin(19, Pin.OUT).on()
+    Pin(21, Pin.OUT).on()
     print('Start Main Program...')
     print('Init Wlan.')
     InitNet()
+    Pin(19, Pin.OUT).off()
     print('Init REPL.')
     InitREPL()
+    Pin(18, Pin.OUT).off()
+    Pin(21, Pin.OUT).off()
     print('Import App Process.')
     app_light = Pin(2, Pin.OUT)
     try:
-        
         app_light.value(1)
         import app
         print('Start App Process.')
