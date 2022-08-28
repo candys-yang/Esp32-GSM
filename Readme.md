@@ -1,5 +1,8 @@
 # ESP-GSM
-使用 ESP32，基于AT指令实现的短信猫
+
+>Version: 1.0
+
+使用 ESP32，基于AT指令实现的短信猫（SIM 7600 ）
 
 ## Quick start
 
