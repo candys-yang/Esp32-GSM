@@ -20,6 +20,7 @@ NOTE:
 '''
 import time
 import os
+import json
 from binascii import unhexlify, hexlify
 from machine import Pin, PWM
 from machine import Timer
@@ -33,7 +34,9 @@ STAT_CPIN = 'ERROR'   # READY|ERROR
 STAT_AT =   False     # 
 STAT_AT_TIME = 0      #
 STAT_CGREG= False     # 
+STAT_CGSN = ''        # 设备序列号
 STAT_CHECK_TIME = 0   # 下次状态检查时间
+
 
 TASK_QUEUE = []
 READ_QUEUE = []       #完整的命令结果，如：  [ ['AT+CSQ','xxxxxxxxx','OK'], ... ]
@@ -42,21 +45,34 @@ class API: ...
 
 class Net: 
     ''' 网络传输 '''
-    def __init__(self, uart) -> None: self.uart = uart
+    def __init__(self, uart) -> None: 
+        self.uart = uart
+        self.conf = {}
+        try:
+            with open('config.json','r') as f: self.conf = json.load(f)
+        except Exception as e: 
+            print("Read ConfigFile Failed. " + str(e))
+            pass
 
     def SentSTAT(self): 
         ''' 发送状态数据到远程服务器 '''
         global STAT_CSQ, STAT_CSCA, STAT_CPIN, STAT_AT, STAT_CGREG
         self.uart.Write('AT+HTTPINIT')
-        data = {
-            "STAT_CSQ": STAT_CSQ, 
-            "STAT_CSCA": STAT_CSCA, 
-            "STAT_CPIN": STAT_CPIN, 
-            "STAT_AT": STAT_AT, 
-            "STAT_CGREG": STAT_CGREG}
-        data = hexlify(str(data).encode('utf-16be')).decode('ascii').upper()
+        gd = {
+            "STAT_CSQ": str(STAT_CSQ), 
+            "STAT_CSCA": str(STAT_CSCA), 
+            "STAT_CPIN": str(STAT_CPIN), 
+            "STAT_AT": str(STAT_AT), 
+            "STAT_CGREG": str(STAT_CGREG),
+            "STAT_CGSN": str(STAT_CGSN)
+        }
+        data = str(gd)
+        data = hexlify(data).decode('ascii').upper()
+        print(data)
         self.uart.Write(
-            'AT+HTTPPARA="URL","http://47.104.187.138:5000/stat?&p={0}"'.format(
+            'AT+HTTPPARA="URL","http://{0}:{1}/stat?&p={2}"'.format(
+                str(self.conf['server']['ip']),
+                str(self.conf['server']['port']),
                 data
             ))
         self.uart.Write('AT+HTTPACTION=0')
@@ -71,8 +87,14 @@ class Net:
         ''' 发送短信到远程服务器 '''
         self.uart.Write('AT+HTTPINIT')
         self.uart.Write(
-            'AT+HTTPPARA="URL","http://47.104.187.138:5000/gsm?&b={0}&s={1}&d={2}"'\
-            .format(gsm_body, gsm_source, gsm_date))
+            'AT+HTTPPARA="URL","http://{0}:{1}/gsm?&b={2}&s={3}&d={4}"'\
+            .format(
+                str(self.conf['server']['ip']),
+                str(self.conf['server']['port']),
+                gsm_body, 
+                gsm_source, 
+                str(gsm_date).replace(" ","-")
+            ))
         self.uart.Write('AT+HTTPACTION=0')
         # 读取返回
         self.uart.Write('AT+HTTPHEAD')
@@ -379,7 +401,12 @@ class Timers:
                     v = mate.replace("+CSCA: ","").rsplit(',')
                     v = v[0].replace("\"","")
                     STAT_CSCA = v
-            #
+            # 控制短信数量
+            if qd[0] == 'AT+CPMS?': 
+                mate = qd[1].rsplit(",")
+                if int(mate[1]) >= 45: 
+                    TASK_QUEUE.append({"type": "at", "data": 'AT+CMGD=0,1',"callback": print})
+
         # STAT_AT_TIME 过期状态更新
         if STAT_AT_TIME + 60 <= time.time(): 
             STAT_AT = False
@@ -413,16 +440,14 @@ class Cmd:
 
     def Stat(self):
         ''' 显示当前状态 '''
-        global STAT_CSQ
-        global STAT_CSCA
-        global STAT_CPIN
-        global STAT_AT
-        global STAT_CGREG
+        global STAT_CSQ, STAT_CSCA, STAT_CPIN
+        global STAT_AT, STAT_CGREG, STAT_CGSN
         print("STAT_CSQ=" + str(STAT_CSQ))
         print("STAT_CSCA=" + str(STAT_CSCA))
         print("STAT_CPIN=" + str(STAT_CPIN))
         print("STAT_AT=" + str(STAT_AT))
         print("STAT_CGREG=" + str(STAT_CGREG))
+        print("STAT_CGSN=" + str(STAT_CGSN))
 
 
 
@@ -443,6 +468,11 @@ class Main:
             period=10, mode=Timer.PERIODIC, 
             callback=lambda p:timers.CycleMain())
 
+        def cgsn(new_val): 
+            global STAT_CGSN
+            STAT_CGSN = new_val[1]
+
+        TASK_QUEUE.append({"type": "at", "data": 'AT+CGSN',"callback": cgsn})
 
         # 主循环
         while True: 

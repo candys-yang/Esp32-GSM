@@ -1,27 +1,36 @@
-import socketserver
+'''
+服务器需要部署在公网
 
-class MyTCPHandler(socketserver.BaseRequestHandler):
-    """
-    The request handler class for our server.
+模块使用 4G 流量对外通讯
 
-    It is instantiated once per connection to the server, and must
-    override the handle() method to implement communication to the
-    client.
-    """
+'''
+from binascii import hexlify, unhexlify
+from flask import Flask, request
 
-    def handle(self):
-        # self.request is the TCP socket connected to the client
-        self.data = self.request.recv(1024).strip()
-        print("{} wrote:".format(self.client_address[0]))
-        print(self.data)
-        # just send back the same data, but upper-cased
-        self.request.sendall(self.data.upper())
+app = Flask(__name__)
+app.debug = True
 
-if __name__ == "__main__":
-    HOST, PORT = "localhost", 8266
+@app.route("/stat", methods=["GET"])
+def stat():
+    print('\r\n')
+    arg = request.args
+    p = unhexlify(arg['p']).decode('ascii')
+    print(p)
+    print('\r\n')
+    return "OK"
 
-    # Create the server, binding to localhost on port 9999
-    with socketserver.TCPServer((HOST, PORT), MyTCPHandler) as server:
-        # Activate the server; this will keep running until you
-        # interrupt the program with Ctrl-C
-        server.serve_forever()
+@app.route("/gsm", methods=["GET"])
+def gsm():
+    print('\r\n')
+    arg = request.args
+    b = unhexlify(arg['b']).decode('utf-16be')
+    s = arg['s']
+    d = arg['d']
+    print(b)
+    print(s)
+    print(d)
+    print('\r\n')
+    return "OK"
+
+
+app.run('0.0.0.0')
