@@ -20,6 +20,7 @@ NOTE:
 '''
 import time
 import os
+from binascii import unhexlify, hexlify
 from machine import Pin, PWM
 from machine import Timer
 from machine import UART
@@ -41,21 +42,28 @@ class API: ...
 
 class Net: 
     ''' 网络传输 '''
-    def __init__(self, urat) -> None: self.urat = urat
+    def __init__(self, uart) -> None: self.uart = uart
 
     def SentSTAT(self): 
         ''' 发送状态数据到远程服务器 '''
         global STAT_CSQ, STAT_CSCA, STAT_CPIN, STAT_AT, STAT_CGREG
-        self.urat.write('AT+CGDCONT=1,"IP","CMNET"' + chr(13))
-        self.urat.write('AT+CSOCKSETPN=1' + chr(13))
-        self.urat.write('AT+CIPMODE=0' + chr(13))
-        self.urat.write('AT+NETOPEN')
-        self.urat.write('AT+CIPOPEN=0,"TCP","47.104.187.138",8266' + chr(13))
-        time.sleep(5)
-        self.urat.write('AT+CIPSEND=0,9' + chr(13))
-        time.sleep(5)
-        self.urat.write('123456789' + chr(13))
-        self.urat.write('AT+CIPCLOSE=0' + chr(13))
+        self.uart.Write('AT+HTTPINIT')
+        data = {
+            "STAT_CSQ": STAT_CSQ, 
+            "STAT_CSCA": STAT_CSCA, 
+            "STAT_CPIN": STAT_CPIN, 
+            "STAT_AT": STAT_AT, 
+            "STAT_CGREG": STAT_CGREG}
+        data = hexlify(str(data).encode('utf-16be')).decode('ascii').upper()
+        self.uart.Write(
+            'AT+HTTPPARA="URL","http://47.104.187.138:5000/stat?&p={0}"'.format(
+                data
+            ))
+        self.uart.Write('AT+HTTPACTION=0')
+        # 读取返回
+        self.uart.Write('AT+HTTPHEAD')
+        # 关闭http对象
+        self.uart.Write('AT+HTTPTERM')
 
         pass
 
@@ -216,7 +224,7 @@ class GPIO:
                         if data.find('+CMTI') == 0: return ['+CMTI', data, 'OK']
                         # 其它消息，立即返回
                         if data.find('*ATREADY') == 0: return ['*ATREADY', data, 'OK']
-                        if data.find('+CPIN') == 0: return ['+CPIN', data, 'OK']
+                        #if data.find('+CPIN') == 0: return ['+CPIN', data, 'OK']
                         if data.find('SMS DONE') == 0: return ['SMS DONE', data, 'OK']
                         if data.find('PB DONE') == 0: return ['PB DONE', data, 'OK']
 
@@ -250,6 +258,9 @@ class Timers:
     def __init__(self, uart:GPIO.Uart) -> None:
         ''' 初始化定时器操作对象 '''
         self.uart = uart
+        self.light = GPIO.Light()
+        self.time_count = 6000
+        self.time_count_unixt = time.time()
         pass
 
     def CycleMain(self):
@@ -262,14 +273,28 @@ class Timers:
             Exec_Read()  
             Exec_AT()
         '''
-        global TASK_QUEUE, STAT_CHECK_TIME
+        # 周期所需时间统计
+        if self.time_count <= 0:
+            self.time_count = 6000
+            ct = time.time()
+            print('Timer 0 , 6000 cycles RunTime:', ct - self.time_count_unixt )
+            self.time_count_unixt = ct
+        else:
+            self.time_count -= 1
         #
+        if self.time_count % 5 == 0: self.light.TimeMain()
+        #
+        global TASK_QUEUE, STAT_CHECK_TIME
+        # 互斥任务
         if len(TASK_QUEUE) >= 1:
+            print("DEBUG.CYCLE:TASK_QUEUE")
             q = TASK_QUEUE.pop()
             if q['type'] == 'at': self.Exec_AT(q)
+            print("DEBUG.CYCLE:TASK_QUEUE----------END")
         elif STAT_CHECK_TIME <= time.time():  # 判断是否应该检查状态
-            # 每隔30秒后，检查一次状态
-            STAT_CHECK_TIME = time.time() + 30 
+            print("DEBUG.CYCLE:STAT_CHECK_TIME")
+            # 每隔60秒后，检查一次状态
+            STAT_CHECK_TIME = time.time() + 60 
             self.Exec_AT({"type": "at", "data": "AT", "callback": READ_QUEUE.append})
             self.Exec_AT({"type": "at", "data": "AT+CSQ", "callback": READ_QUEUE.append})
             self.Exec_AT({"type": "at", "data": "AT+CSCA?", "callback": READ_QUEUE.append})
@@ -277,11 +302,14 @@ class Timers:
             self.Exec_AT({"type": "at", "data": "AT+CPIN?", "callback": READ_QUEUE.append})
             self.Exec_AT({"type": "at", "data": "AT+CPMS?", "callback": READ_QUEUE.append})
             self.Exec_AT({"type": "at", "data": "AT+CGREG?", "callback": READ_QUEUE.append})
+            print("DEBUG.CYCLE:STAT_CHECK_TIME----------END")
+            net = Net(self.uart)
+            net.SentSTAT()
         else:
             self.Exec_Read()
 
     def Exec_Read(self): 
-        ''' 定时任务 '''
+        ''' 定时读取 '''
         global READ_QUEUE
         global STAT_CSQ, STAT_CSCA, STAT_CPIN, STAT_AT, STAT_CGREG, STAT_AT_TIME
         # 判断模块是否有需要读取的信息
@@ -293,7 +321,7 @@ class Timers:
             qd = READ_QUEUE.pop()
             print("READ_QUEUE POP: ", qd)
             # 来电，直接挂断
-            if qd[0] == '+CGEV' or qd[0] == 'RING':
+            if qd[0] == 'RING':
                 self.Exec_AT({'type':'at','data':'AT+CHUP','callback': print})
             # 新短信处理
             if qd[0].find('+CMTI') == 0: 
@@ -314,7 +342,7 @@ class Timers:
                 STAT_AT_TIME = time.time()
                 STAT_AT = True
             #   sin卡连接
-            if qd[0] == '+CPIN': 
+            if qd[0] == 'AT+CPIN?': 
                 if str(qd[1]).find('READY') >= 0: 
                     STAT_CPIN = 'READY'
                 else:
@@ -326,7 +354,7 @@ class Timers:
                 else:
                     STAT_CGREG = False
             #   中心号码
-            if qd[0] == 'STAT_CSCA': 
+            if qd[0] == 'AT+CSCA?': 
                 mate = str(qd[1])
                 if mate.find("ERROR") >= 0: 
                     STAT_CSCA = "ERROR"
@@ -351,7 +379,7 @@ class Timers:
                 {"type": "at", "data": AT命令内容, "callback": 回调函数 }
         
         '''
-        print("DEBUG:UART:SentAT: ", taskdata['data'])
+        print("DEBUG:UART:Exec_AT: ", taskdata['data'])
         if self.uart.uart.any() >= 1: self.uart.ReadAll()
         self.uart.Write(taskdata['data'])
         redata = self.uart.ReadOne()
