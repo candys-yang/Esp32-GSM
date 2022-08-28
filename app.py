@@ -67,9 +67,17 @@ class Net:
 
         pass
 
-    def SentGSM(self): 
+    def SentGSM(self, gsm_body, gsm_source, gsm_date): 
         ''' 发送短信到远程服务器 '''
-
+        self.uart.Write('AT+HTTPINIT')
+        self.uart.Write(
+            'AT+HTTPPARA="URL","http://47.104.187.138:5000/gsm?&b={0}&s={1}&d={2}"'\
+            .format(gsm_body, gsm_source, gsm_date))
+        self.uart.Write('AT+HTTPACTION=0')
+        # 读取返回
+        self.uart.Write('AT+HTTPHEAD')
+        # 关闭http对象
+        self.uart.Write('AT+HTTPTERM')
         pass
 
 
@@ -77,13 +85,20 @@ class MSG:
     ''' 
     对短信进行解析处理 
     '''
-    def __init__(self) -> None: pass
+    def __init__(self, uart) -> None: self.uart = uart
 
     def ReadMate(self, data): 
         ''' 读取模块原始的短信数据 '''
         print('ReadMate ---> ', data)
-        head = str(data[1])
-        body = str(data[2])
+        s = 0
+        head = ''
+        body = ''
+        for i in data: 
+            if str(i) == 'OK': break
+            if s == 1: head = str(i)
+            if s >= 2: body += str(i)
+            s += 1
+        #
         print("ReadMate.head ---> ", head)
         print("ReadMate.body ---> ", body)
         # 处理头信息
@@ -101,6 +116,8 @@ class MSG:
             )
         print('ReadMate.head.source ---> ', source)
         print('ReadMate.head.dates  ---> ', dates)
+        net = Net(self.uart)
+        net.SentGSM(body, source, dates)
     pass
 
 class GPIO:
@@ -329,7 +346,7 @@ class Timers:
                 self.Exec_AT({'type':'at','data':'AT+CMGF=1','callback': print})
                 self.Exec_AT({'type':'at','data':'AT+CSCS="GSM"','callback': print})
                 self.Exec_AT(
-                    {'type':'at','data':'AT+CMGR=' + msgindex[1],'callback': MSG().ReadMate})
+                    {'type':'at','data':'AT+CMGR=' + msgindex[1],'callback': MSG(self.uart).ReadMate})
             # 处理状态信息
             #   信号
             if qd[0] == 'AT+CSQ': 
